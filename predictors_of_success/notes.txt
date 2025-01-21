@@ -1,0 +1,7 @@
+1) The email defined "change in AHI" as "pre minus post AHI"; should be "post minus pre AHI", right?
+2) For BMI, I used "BMI - preop" and discarded "latest BMI".
+3) For supine-dependent apnea, is "success" still defined using overall AHI, (i.e., supine AHI is only used to identify the supine-dependent group, not to define "success"), right?
+4) The DISE values are mostly (>90%) missing. Is it reasonable to assume this is missing completely at random? If not, we should probably use regression imputation, although this is a bit more work.
+5) What do the Oropharynx values 0, 1, and 2 correspond to? Are the completely discrete categories? Or, e.g., ordinal? Is there a reason 0 and 1 are grouped in the formula?
+6) Is the datapoint with preop_AHI=178 an error? It seems too high; the next largest value it 105. I've removed it in this analysis.
+7) For supine dependent apnea, I used supine and non-supine AHIs only to identify the supine-dependent subgroup, and then ran the same analyses (using overall AHIs) on this subgroup.
