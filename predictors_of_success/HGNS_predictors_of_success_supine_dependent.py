@@ -2,6 +2,8 @@ import pandas as pd
 
 import HGNS_predictors_of_success as hgns_pos
 
+pd.set_option('display.max_rows', None)
+
 def get_supine_dependent_group(df):
   # When supine AHI is missing, use Medicare or AASMI supine AHI instead
   df['supine_AHI'] = (df['Supine AHI']

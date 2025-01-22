@@ -6,6 +6,8 @@ import scipy.stats as stats
 import seaborn as sns
 import statsmodels.formula.api as smf
 
+pd.set_option('display.max_rows', None)
+
 data_filename = 'data/correctUASDatabase-HGNSPredictorsOfSucc_DATA_LABELS_2025-01-18_1334.csv'
 
 # Columns used in this analysis
@@ -26,6 +28,8 @@ usecols=[
 ]
 
 def main(df):
+
+  # ==================== BEGIN PREPROCESSING ====================
   # Shorten some column names to be easier to use
   df = df.rename(columns={
           'Age at time of surgery': 'Age',
@@ -57,20 +61,27 @@ def main(df):
       'postop PSG AASMI AHI',
   ])
   
-  # There's one datapoint with preop_AHI = 178 which seems like an error (too larger);
-  # I've removed it for this analysis.
+  # There's one datapoint with preop_AHI = 178 which seems like an error (too large);
+  # I've dropped it for this analysis.
   df = df[df['preop_AHI'] < 175]
   
   # Since DISE PAP opening pressure is >90% missing, we need some way to handle this;
   # for regression, replacing with the mean value is reasonable if we assume the values
   # are "missing completely at random" (MCAR); if not, we should impute by regression.
   df['DISE'] = df['DISE'].fillna(df['DISE'].mean())
+
+  # Drop any rows with remaining missing values
+  df = df.dropna(how='any')
   
-  print(df)
-  print(df.columns)
-  print(df.dtypes)
+  # ===================== END PREPROCESSING =====================
+
+  # Print a summary of the data after preprocessing
   print(df.describe())
-  
+  print(df['Gender'].value_counts())
+  print(df['Oropharynx'].value_counts())
+  print(df['Sher15'].value_counts())
+
+  # ================= BEGIN REGRESSION ANALYSES =================
   # Since postop_AHI is a count, use Poisson regression
   postop_AHI_model = smf.poisson(
       formula=('postop_AHI ~ Age + C(Gender, Treatment(reference="Male")) + BMI + DISE'
@@ -94,6 +105,7 @@ def main(df):
       data=df
   ).fit()
   print(Sher15_model.summary())
+  # ================== END REGRESSION ANALYSES ==================
   
   sns.pairplot(df)
   plt.gcf().subplots_adjust(bottom=0.05)
