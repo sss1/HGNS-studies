@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import pylab
 import scipy.stats as stats
@@ -24,7 +23,12 @@ usecols=[
     'Gender',
     'BMI - preop',
     'DISE PAP opening pressure',
-    'Oropharynx'
+    'Oropharynx',
+    # Variables used to identify supine-dependent apnea
+    'Supine AHI',
+    'Preop PSG AASM Supine AHI',
+    'Preop PSG Medicare Supine AHI',
+    'Non-supine AHI',
 ]
 
 def main(df):
@@ -36,6 +40,9 @@ def main(df):
           'BMI - preop': 'BMI',
           'DISE PAP opening pressure': 'DISE',
   })
+  
+  # One patient's preop_AHI was mistakenly recorded as 178; it should be 34.8
+  df['Preop sleep study: AHI'] = df['Preop sleep study: AHI'].replace(to_replace={178: 34.8})
 
   # When sleep study AHI is missing, use Medicare or AASMI AHI instead
   df['preop_AHI'] = (df['Preop sleep study: AHI']
@@ -50,6 +57,12 @@ def main(df):
   df['change_AHI'] = df['postop_AHI'] - df['preop_AHI']
   df['Sher15'] = (((df['postop_AHI'] <= 0.5*df['preop_AHI'])
                   & (df['postop_AHI'] < 15))).astype('float')
+
+  # Identify subgroup of patients with supine-dependent apnea for secondary analysis
+  df['supine_AHI'] = (df['Supine AHI']
+                      .fillna(df['Preop PSG Medicare Supine AHI'])
+                      .fillna(df['Preop PSG AASM Supine AHI']))
+  df['is_supine_dependent'] = (df['supine_AHI'] >= 2*df['Non-supine AHI'])
   
   # After this, we no longer need the original distinct AHIs
   df = df.drop(columns=[
@@ -59,16 +72,21 @@ def main(df):
       'postop sleep study: AHI',
       'postop PSG Medicare AHI',
       'postop PSG AASMI AHI',
+      'Supine AHI',
+      'Preop PSG AASM Supine AHI',
+      'Preop PSG Medicare Supine AHI',
+      'Non-supine AHI',
+      'supine_AHI',
   ])
-  
-  # There's one datapoint with preop_AHI = 178 which seems like an error (too large);
-  # I've dropped it for this analysis.
-  df = df[df['preop_AHI'] < 175]
   
   # Since DISE PAP opening pressure is >90% missing, we need some way to handle this;
   # for regression, replacing with the mean value is reasonable if we assume the values
   # are "missing completely at random" (MCAR); if not, we should impute by regression.
   df['DISE'] = df['DISE'].fillna(df['DISE'].mean())
+
+  # Since very few patients have group Oropharynx 2, group Oropharynx values 1
+  # and 2 into a single category
+  df['Oropharynx'] = (df['Oropharynx'] > 0)
 
   # Drop any rows with remaining missing values
   df = df.dropna(how='any')
@@ -106,7 +124,39 @@ def main(df):
   ).fit()
   print(Sher15_model.summary())
   # ================== END REGRESSION ANALYSES ==================
+  # ============ BEGIN SUPINE DEPENDENCE ANALYSES ===============
+  # Since is_supine_dependent is binary and postop_AHI is continuous, we use a t-test
+  result = stats.mannwhitneyu(
+    df['postop_AHI'][df['is_supine_dependent']],
+    df['postop_AHI'][~df['is_supine_dependent']],
+  )
+  print('\nMann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
+  print(f'U: {result.statistic}  p: {result.pvalue}')
+  sns.violinplot(data=df, x='is_supine_dependent', y='postop_AHI')
+
+  # Since is_supine_dependent is binary and change_AHI is continuous, we use a t-test
+  result = stats.mannwhitneyu(
+    df['change_AHI'][df['is_supine_dependent']],
+    df['change_AHI'][~df['is_supine_dependent']],
+  )
+  print('\nMann-Whitney U-test for independence of is_supine_dependent and change_AHI:')
+  print(f'U: {result.statistic}  p: {result.pvalue}')
+  plt.figure()
+  sns.violinplot(data=df, x='is_supine_dependent', y='change_AHI')
+
+  # Since both is_supine_dependent and Sher15 are binary, we use a Chi^2 test
+  contingency_table = pd.crosstab(df['is_supine_dependent'], df['Sher15'])
+  chi2, p, dof, expected = stats.chi2_contingency(contingency_table)
+  print('\nChi^2 test for independence of supine dependence and Sher15:')
+  print('Observed contingency table:')
+  print(contingency_table)
+  print('Expected contingency table:')
+  print(expected)
+  print(f'Test tesults: chi2: {chi2}  p: {p}  dof: {dof}\n')
+
+  # ============= END SUPINE DEPENDENCE ANALYSES ================
   
+  # Make a pairs plot just to sanity check everything
   sns.pairplot(df)
   plt.gcf().subplots_adjust(bottom=0.05)
   pylab.show()
