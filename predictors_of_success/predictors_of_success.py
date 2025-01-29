@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 import pandas as pd
-import pylab
 import scipy.stats as stats
 import seaborn as sns
 import statsmodels.formula.api as smf
@@ -29,9 +28,12 @@ usecols=[
     'Preop PSG AASM Supine AHI',
     'Preop PSG Medicare Supine AHI',
     'Non-supine AHI',
+    # Variables needed for changes supine-dependent apnea
+    'Supine AHI.1',
+    'Non-supine AHI.1',
 ]
 
-def main(df):
+def main(df: pd.DataFrame) -> None:
 
   # ==================== BEGIN PREPROCESSING ====================
   # Shorten some column names to be easier to use
@@ -41,8 +43,9 @@ def main(df):
           'DISE PAP opening pressure': 'DISE',
   })
   
-  # One patient's preop_AHI was mistakenly recorded as 178; it should be 34.8
+  # Fix a few values that were incorrectly recorded in the dataset
   df['Preop sleep study: AHI'] = df['Preop sleep study: AHI'].replace(to_replace={178: 34.8})
+  df['Non-supine AHI.1'] = df['Non-supine AHI.1'].replace(to_replace={238.8: 59.9, 232: 50.0})
 
   # When sleep study AHI is missing, use Medicare or AASMI AHI instead
   df['preop_AHI'] = (df['Preop sleep study: AHI']
@@ -57,6 +60,9 @@ def main(df):
   df['change_AHI'] = df['postop_AHI'] - df['preop_AHI']
   df['Sher15'] = (((df['postop_AHI'] <= 0.5*df['preop_AHI'])
                   & (df['postop_AHI'] < 15))).astype('float')
+  df['change_supine_AHI'] = df['Supine AHI.1'] - df['Supine AHI']
+  df['change_nonsupine_AHI'] = df['Non-supine AHI.1'] - df['Non-supine AHI']
+  print(df)
 
   # Identify subgroup of patients with supine-dependent apnea for secondary analysis
   df['supine_AHI'] = (df['Supine AHI']
@@ -87,11 +93,7 @@ def main(df):
   # Since very few patients have group Oropharynx 2, group Oropharynx values 1
   # and 2 into a single category
   df['Oropharynx'] = (df['Oropharynx'] > 0)
-
-  # Drop any rows with remaining missing values
-  df = df.dropna(how='any')
   
-  # ===================== END PREPROCESSING =====================
 
   # Print a summary of the data after preprocessing
   print(df.describe())
@@ -99,7 +101,13 @@ def main(df):
   print(df['Oropharynx'].value_counts())
   print(df['Sher15'].value_counts())
 
+  # Make a pairs plot just to sanity check everything
+  sns.pairplot(df)
+  plt.gcf().subplots_adjust(bottom=0.05)
+
+  # ===================== END PREPROCESSING =====================
   # ================= BEGIN REGRESSION ANALYSES =================
+
   # Since postop_AHI is a count, use Poisson regression
   postop_AHI_model = smf.poisson(
       formula=('postop_AHI ~ Age + C(Gender, Treatment(reference="Male")) + BMI + DISE'
@@ -123,12 +131,15 @@ def main(df):
       data=df
   ).fit()
   print(Sher15_model.summary())
+
   # ================== END REGRESSION ANALYSES ==================
   # ============ BEGIN SUPINE DEPENDENCE ANALYSES ===============
+
   # Since is_supine_dependent is binary and postop_AHI is continuous, we use a t-test
   result = stats.mannwhitneyu(
     df['postop_AHI'][df['is_supine_dependent']],
     df['postop_AHI'][~df['is_supine_dependent']],
+    alternative='greater',
   )
   print('\nMann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
   print(f'U: {result.statistic}  p: {result.pvalue}')
@@ -138,6 +149,7 @@ def main(df):
   result = stats.mannwhitneyu(
     df['change_AHI'][df['is_supine_dependent']],
     df['change_AHI'][~df['is_supine_dependent']],
+    alternative='greater',
   )
   print('\nMann-Whitney U-test for independence of is_supine_dependent and change_AHI:')
   print(f'U: {result.statistic}  p: {result.pvalue}')
@@ -154,12 +166,33 @@ def main(df):
   print(expected)
   print(f'Test tesults: chi2: {chi2}  p: {p}  dof: {dof}\n')
 
+  # Calculate change_supine_AHI and change_nonsupine_AHI to see if HGNS has a
+  # differential effect.
+  result = stats.ttest_rel(df['change_supine_AHI'], df['change_nonsupine_AHI'], nan_policy='omit')
+  print(f'\n\nDifference in means between changes in supine and nonsupine AHIs:')
+  print((df['change_supine_AHI'] - df['change_nonsupine_AHI']).mean())
+  print(f't: {result.statistic}  p: {result.pvalue}  df: {result.df}\n\n')
+
   # ============= END SUPINE DEPENDENCE ANALYSES ================
+  # ================== BEGIN SCORE ANALYSES =====================
+
+  # Calculate score and see if it is significantly predictive of outcomes
+  df['score'] = (5 * (df['DISE'] <= 8)
+                 + 5 * (df['Gender'] == 'Female')
+                 + (df['BMI'] <= 35) + (df['BMI'] <= 32.5) + (df['BMI'] <= 30) + (df['BMI'] <= 27.5) + (df['BMI'] <= 25)
+                 + 5 * (~df['Oropharynx'])  # False = no collapse = 5pts, True = partial or complete collapse = 0 pts
+                 + (df['preop_AHI'] >= 65) + (df['preop_AHI'] >= 55) + (df['preop_AHI'] >= 45) + (df['preop_AHI'] >= 35) + (df['preop_AHI'] >= 25)
+                 + (df['Age'] < 75) + (df['Age'] < 65) + (df['Age'] < 55) + (df['Age'] < 45) + (df['Age'] < 35))
+  # Since postop_AHI is a count, use Poisson regression
+  print(smf.poisson(formula=('postop_AHI ~ score'), data=df).fit().summary())
+  # Since change_AHI is continuous, use linear regression
+  print(smf.ols(formula=('change_AHI ~ score'), data=df).fit().summary())
+  # Since Sher15 is boolean, use logistic regression
+  print(smf.logit(formula=('Sher15 ~ score'), data=df).fit().summary())
+
+  # =================== END SCORE ANALYSES ======================
   
-  # Make a pairs plot just to sanity check everything
-  sns.pairplot(df)
-  plt.gcf().subplots_adjust(bottom=0.05)
-  pylab.show()
+  plt.show()
 
 
 if __name__ == "__main__":
