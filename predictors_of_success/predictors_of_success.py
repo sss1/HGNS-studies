@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import scipy.stats as stats
 import seaborn as sns
@@ -31,7 +32,17 @@ usecols=[
     # Variables needed for changes supine-dependent apnea
     'Supine AHI.1',
     'Non-supine AHI.1',
+    'Race/Ethnicity',
 ]
+
+def print_demographics(df: pd.DataFrame, header: str) -> None:
+  print(f'\n{header}:')
+  print(df['Gender'].value_counts(dropna=False))
+  print(df['Race'].value_counts(dropna=False))
+  print(df['Oropharynx'].value_counts(dropna=False))
+  print(df[['Age', 'BMI']].describe())
+  if 'Sher15' in df.columns:
+    print(df['Sher15'].value_counts(dropna=False))
 
 def main(df: pd.DataFrame) -> None:
 
@@ -41,7 +52,11 @@ def main(df: pd.DataFrame) -> None:
           'Age at time of surgery': 'Age',
           'BMI - preop': 'BMI',
           'DISE PAP opening pressure': 'DISE',
+          'Race/Ethnicity': 'Race',
   })
+
+  
+  print_demographics(df, header='Summary statistics before preprocessing')
   
   # Fix a few values that were incorrectly recorded in the dataset
   df['Preop sleep study: AHI'] = df['Preop sleep study: AHI'].replace(to_replace={178: 34.8})
@@ -62,7 +77,6 @@ def main(df: pd.DataFrame) -> None:
                   & (df['postop_AHI'] < 15))).astype('float')
   df['change_supine_AHI'] = df['Supine AHI.1'] - df['Supine AHI']
   df['change_nonsupine_AHI'] = df['Non-supine AHI.1'] - df['Non-supine AHI']
-  print(df)
 
   # Identify subgroup of patients with supine-dependent apnea for secondary analysis
   df['supine_AHI'] = (df['Supine AHI']
@@ -92,14 +106,16 @@ def main(df: pd.DataFrame) -> None:
 
   # Since very few patients have group Oropharynx 2, group Oropharynx values 1
   # and 2 into a single category
+  print(df['Oropharynx'].value_counts(dropna=False))
   df['Oropharynx'] = (df['Oropharynx'] > 0)
   
+  print(df['Gender'].value_counts(dropna=False))
+  print(df['Oropharynx'].value_counts(dropna=False))
+  # Drop patients still missing any of the predictor variables
+  df = df.dropna(subset=['Age', 'Gender', 'BMI', 'DISE', 'Oropharynx'])
 
-  # Print a summary of the data after preprocessing
-  print(df.describe())
-  print(df['Gender'].value_counts())
-  print(df['Oropharynx'].value_counts())
-  print(df['Sher15'].value_counts())
+  print_demographics(df, header='Summary statistics after preprocessing')
+  print("\n\n\n\n")
 
   # Make a pairs plot just to sanity check everything
   sns.pairplot(df)
@@ -114,7 +130,9 @@ def main(df: pd.DataFrame) -> None:
                ' + C(Oropharynx, Treatment(reference=0)) + preop_AHI'),
       data=df
   ).fit()
+  print("Poisson Regression of Post-Op AHI:\n")
   print(postop_AHI_model.summary())
+  print("\n\n\n\n")
   
   # Since change_AHI is continuous, use linear regression
   change_AHI_model = smf.ols(
@@ -122,7 +140,9 @@ def main(df: pd.DataFrame) -> None:
                ' + C(Oropharynx, Treatment(reference=0)) + preop_AHI'),
       data=df
   ).fit()
+  print("Linear Regression of Change in AHI:\n")
   print(change_AHI_model.summary())
+  print("\n\n\n\n")
   
   # Since Sher15 is boolean, use logistic regression
   Sher15_model = smf.logit(
@@ -130,7 +150,9 @@ def main(df: pd.DataFrame) -> None:
                ' + C(Oropharynx, Treatment(reference=0)) + preop_AHI'),
       data=df
   ).fit()
+  print("Logistic Regression of Sher15:\n")
   print(Sher15_model.summary())
+  print("\n\n\n\n")
 
   # ================== END REGRESSION ANALYSES ==================
   # ============ BEGIN SUPINE DEPENDENCE ANALYSES ===============
@@ -141,7 +163,7 @@ def main(df: pd.DataFrame) -> None:
     df['postop_AHI'][~df['is_supine_dependent']],
     alternative='greater',
   )
-  print('\nMann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
+  print('Mann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
   print(f'U: {result.statistic}  p: {result.pvalue}')
   sns.violinplot(data=df, x='is_supine_dependent', y='postop_AHI')
 
@@ -152,7 +174,7 @@ def main(df: pd.DataFrame) -> None:
     alternative='greater',
   )
   print('\nMann-Whitney U-test for independence of is_supine_dependent and change_AHI:')
-  print(f'U: {result.statistic}  p: {result.pvalue}')
+  print(f'U: {result.statistic}  p: {result.pvalue}\n\n\n\n')
   plt.figure()
   sns.violinplot(data=df, x='is_supine_dependent', y='change_AHI')
 
@@ -164,14 +186,18 @@ def main(df: pd.DataFrame) -> None:
   print(contingency_table)
   print('Expected contingency table:')
   print(expected)
-  print(f'Test tesults: chi2: {chi2}  p: {p}  dof: {dof}\n')
+  print(f'Test tesults: chi2: {chi2}  p: {p}  dof: {dof}\n\n\n\n')
 
-  # Calculate change_supine_AHI and change_nonsupine_AHI to see if HGNS has a
+  # Compare change_supine_AHI and change_nonsupine_AHI to see if HGNS has a
   # differential effect.
+  supine_ci = stats.bootstrap(data=(df['change_supine_AHI'],), method='percentile', statistic=np.nanmean, confidence_level=0.95, rng=0).confidence_interval
+  print(f'Supine AHI had mean change {df["change_supine_AHI"].mean():.3f} (95% bootstrap CI ({supine_ci.low}, {supine_ci.high})).')
+  nonsupine_ci = stats.bootstrap(data=(df['change_nonsupine_AHI'],), method='percentile', statistic=np.nanmean, confidence_level=0.95, rng=0).confidence_interval
+  print(f'Non-Supine AHI had mean change {df["change_nonsupine_AHI"].mean():.3f} (95% bootstrap CI ({nonsupine_ci.low}, {nonsupine_ci.high})).')
   result = stats.ttest_rel(df['change_supine_AHI'], df['change_nonsupine_AHI'], nan_policy='omit')
-  print(f'\n\nDifference in means between changes in supine and nonsupine AHIs:')
+  print(f'Difference in means between changes in supine and nonsupine AHIs:')
   print((df['change_supine_AHI'] - df['change_nonsupine_AHI']).mean())
-  print(f't: {result.statistic}  p: {result.pvalue}  df: {result.df}\n\n')
+  print(f't: {result.statistic}  p: {result.pvalue}  df: {result.df}\n\n\n\n')
 
   # ============= END SUPINE DEPENDENCE ANALYSES ================
   # ================== BEGIN SCORE ANALYSES =====================
