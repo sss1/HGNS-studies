@@ -3,9 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data files
+# Data and figure files
 predictors_of_success/data/*
 watchpat/data/*
+*/figures/*
 
 # C extensions
 *.so
