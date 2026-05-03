@@ -54,7 +54,6 @@ def main(df: pd.DataFrame) -> None:
           'DISE PAP opening pressure': 'DISE',
           'Race/Ethnicity': 'Race',
   })
-
   
   print_demographics(df, header='Summary statistics before preprocessing')
   
@@ -98,10 +97,65 @@ def main(df: pd.DataFrame) -> None:
       'Non-supine AHI',
       'supine_AHI',
   ])
+
+  # Make pairs plots and histograms
+  plot_df = (
+      df.copy(deep=True)
+        .drop(columns=[
+            'Supine AHI.1',
+            'Non-supine AHI.1',
+            'change_supine_AHI',
+            'change_nonsupine_AHI',
+            'is_supine_dependent',
+            # 'Race',  # Race has too many categorical values for this plot
+        ]).rename(columns={
+            'Oropharynx': 'LWC',
+            'Gender': 'Sex',
+            'DISE': 'PhOP',
+            'preop_AHI': 'Baseline\nAHI',
+            'postop_AHI': 'Post-op\nAHI',
+            'change_AHI': 'Change in AHI\n(post - pre)',
+            'Sher15': 'Sher15\nSuccess',
+        })
+  )
+  sns.set_theme(font_scale=1.5)  # Increase font size
+
+  # Pair plot for continuous variables
+  sns.pairplot(plot_df, vars=['Age', 'BMI', 'PhOP', 'Baseline\nAHI', 'Post-op\nAHI', 'Change in AHI\n(post - pre)'])
+  plt.gcf().subplots_adjust(bottom=0.1)
+  
+  # Histograms for categorical variables
+  plot_df['Race'] = plot_df['Race'].replace({
+      'White/Caucasian': 'White',
+      'Black/African American': 'Black',
+      'Hispanic/Latino/a': 'Hispanic',
+      'NaN': 'Not Reported',
+      'White/Caucasian,Hispanic/Latino/a,Other': 'Hispanic',
+      'Other': 'Not Reported',
+      'White/Caucasian,Asian': 'Asian',
+      'White/Caucasian,Hispanic/Latino/a': 'Hispanic',
+      'Black/African American,Other': 'Black',
+  })
+  plot_df['LWC'] = plot_df['LWC'].replace({
+      0.0: 'None',
+      1.0: 'Partial',
+      2.0: 'Complete',
+  })
+  plot_df['Sher15\nSuccess'] = plot_df['Sher15\nSuccess'].astype('bool').astype('str')
+  plt.figure()
+  plt.subplot(2, 2, 1)
+  sns.histplot(data=plot_df[plot_df['Race'] != 'Not Reported'], x='Race')
+  plt.subplot(2, 2, 2)
+  sns.histplot(data=plot_df, x='Sex')
+  plt.subplot(2, 2, 3)
+  sns.histplot(data=plot_df, x='LWC')
+  plt.subplot(2, 2, 4)
+  sns.histplot(data=plot_df, x='Sher15\nSuccess')
   
   # Since DISE PAP opening pressure is >90% missing, we need some way to handle this;
   # for regression, replacing with the mean value is reasonable if we assume the values
-  # are "missing completely at random" (MCAR); if not, we should impute by regression.
+  # are "missing completely at random" (MCAR); since missing data was mostly due to a
+  # change in the data collection procudure, this seems reasonable.
   df['DISE'] = df['DISE'].fillna(df['DISE'].mean())
 
   # Since very few patients have group Oropharynx 2, group Oropharynx values 1
@@ -116,10 +170,6 @@ def main(df: pd.DataFrame) -> None:
 
   print_demographics(df, header='Summary statistics after preprocessing')
   print("\n\n\n\n")
-
-  # Make a pairs plot just to sanity check everything
-  sns.pairplot(df)
-  plt.gcf().subplots_adjust(bottom=0.05)
 
   # ===================== END PREPROCESSING =====================
   # ================= BEGIN REGRESSION ANALYSES =================
@@ -155,51 +205,6 @@ def main(df: pd.DataFrame) -> None:
   print("\n\n\n\n")
 
   # ================== END REGRESSION ANALYSES ==================
-  # ============ BEGIN SUPINE DEPENDENCE ANALYSES ===============
-
-  # Since is_supine_dependent is binary and postop_AHI is continuous, we use a t-test
-  result = stats.mannwhitneyu(
-    df['postop_AHI'][df['is_supine_dependent']],
-    df['postop_AHI'][~df['is_supine_dependent']],
-    alternative='greater',
-  )
-  print('Mann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
-  print(f'U: {result.statistic}  p: {result.pvalue}')
-  sns.violinplot(data=df, x='is_supine_dependent', y='postop_AHI')
-
-  # Since is_supine_dependent is binary and change_AHI is continuous, we use a t-test
-  result = stats.mannwhitneyu(
-    df['change_AHI'][df['is_supine_dependent']],
-    df['change_AHI'][~df['is_supine_dependent']],
-    alternative='greater',
-  )
-  print('\nMann-Whitney U-test for independence of is_supine_dependent and change_AHI:')
-  print(f'U: {result.statistic}  p: {result.pvalue}\n\n\n\n')
-  plt.figure()
-  sns.violinplot(data=df, x='is_supine_dependent', y='change_AHI')
-
-  # Since both is_supine_dependent and Sher15 are binary, we use a Chi^2 test
-  contingency_table = pd.crosstab(df['is_supine_dependent'], df['Sher15'])
-  chi2, p, dof, expected = stats.chi2_contingency(contingency_table)
-  print('\nChi^2 test for independence of supine dependence and Sher15:')
-  print('Observed contingency table:')
-  print(contingency_table)
-  print('Expected contingency table:')
-  print(expected)
-  print(f'Test tesults: chi2: {chi2}  p: {p}  dof: {dof}\n\n\n\n')
-
-  # Compare change_supine_AHI and change_nonsupine_AHI to see if HGNS has a
-  # differential effect.
-  supine_ci = stats.bootstrap(data=(df['change_supine_AHI'],), method='percentile', statistic=np.nanmean, confidence_level=0.95, rng=0).confidence_interval
-  print(f'Supine AHI had mean change {df["change_supine_AHI"].mean():.3f} (95% bootstrap CI ({supine_ci.low}, {supine_ci.high})).')
-  nonsupine_ci = stats.bootstrap(data=(df['change_nonsupine_AHI'],), method='percentile', statistic=np.nanmean, confidence_level=0.95, rng=0).confidence_interval
-  print(f'Non-Supine AHI had mean change {df["change_nonsupine_AHI"].mean():.3f} (95% bootstrap CI ({nonsupine_ci.low}, {nonsupine_ci.high})).')
-  result = stats.ttest_rel(df['change_supine_AHI'], df['change_nonsupine_AHI'], nan_policy='omit')
-  print(f'Difference in means between changes in supine and nonsupine AHIs:')
-  print((df['change_supine_AHI'] - df['change_nonsupine_AHI']).mean())
-  print(f't: {result.statistic}  p: {result.pvalue}  df: {result.df}\n\n\n\n')
-
-  # ============= END SUPINE DEPENDENCE ANALYSES ================
   # ================== BEGIN SCORE ANALYSES =====================
 
   # Calculate score and see if it is significantly predictive of outcomes

@@ -7,10 +7,30 @@ import statsmodels.formula.api as smf
 
 pd.set_option('display.max_rows', None)
 
-data_filename = 'data/correctUASDatabase-HGNSPredictorsOfSucc_DATA_LABELS_2025-01-18_1334.csv'
+dataset = 'subset'
+
+if dataset == 'subset':
+  data_filename = 'data/HGNS_supine_datasheet-CH.xlsx'  # Subset for supine-dependence
+  loading_function = pd.read_excel
+  extra_usecols = [
+    'Race',
+    'Age',
+    'BMI',
+  ]
+else:
+  data_filename = 'data/correctUASDatabase-HGNSPredictorsOfSucc_DATA_LABELS_2025-01-18_1334.csv'  # Original dataset
+  loading_function = pd.read_csv
+  extra_usecols = [
+    'Race/Ethnicity',
+    'Age at time of surgery',
+    'BMI - preop',
+  ]
+
 
 # Columns used in this analysis
-usecols=[
+usecols=extra_usecols + [
+    # Demographic variables
+    'Gender',
     # AHI variables
     'Preop sleep study: AHI',
     'Preop PSG Medicare AHI',
@@ -26,11 +46,6 @@ usecols=[
     # Variables needed for changes in supine-dependent apnea
     'Supine AHI.1',
     'Non-supine AHI.1',
-    # Demographic variables
-    'Age at time of surgery',
-    'Gender',
-    'BMI - preop',
-    'Race/Ethnicity',
 ]
 
 def print_demographics(df: pd.DataFrame, header: str) -> None:
@@ -40,24 +55,19 @@ def print_demographics(df: pd.DataFrame, header: str) -> None:
   print(df[['Age', 'BMI']].describe())
   if 'Sher15' in df.columns:
     print(df['Sher15'].value_counts(dropna=False))
+  if 'Sher20' in df.columns:
+    print(df['Sher20'].value_counts(dropna=False))
   if 'is_supine_dependent' in df.columns:
     print(df['is_supine_dependent'].value_counts(dropna=False))
 
-  ahi_cols = list(set(df.columns).intersection({'preop_AHI', 'Supine AHI', 'Non-supine AHI'}))
+  ahi_cols = list(set(df.columns).intersection({'preop_AHI', 'Supine AHI', 'Non-supine AHI', 'postop_AHI', 'change_AHI'}))
   print(df[ahi_cols].describe())
   print("\n\n")
 
 def main(df: pd.DataFrame) -> None:
 
   # ==================== BEGIN PREPROCESSING ====================
-  # Shorten some column names to be easier to use
-  df = df.rename(columns={
-          'Age at time of surgery': 'Age',
-          'BMI - preop': 'BMI',
-          'Race/Ethnicity': 'Race',
-  })
-
-  print_demographics(df, header='Summary statistics before preprocessing')
+  # print_demographics(df, header='Summary statistics before preprocessing')
   
   # Fix a few values that were incorrectly recorded in the dataset
   df['Preop sleep study: AHI'] = df['Preop sleep study: AHI'].replace(to_replace={178: 34.8})
@@ -70,12 +80,14 @@ def main(df: pd.DataFrame) -> None:
   df['postop_AHI'] = (df['postop sleep study: AHI']
                       .fillna(df['postop PSG Medicare AHI'])
                       .fillna(df['postop PSG AASMI AHI']))
-  df = df.dropna(subset=['postop_AHI', 'preop_AHI'])
+  df.dropna(subset=['postop_AHI', 'preop_AHI'], inplace=True)
   
   # Compute other success measures
   df['change_AHI'] = df['postop_AHI'] - df['preop_AHI']
   df['Sher15'] = (((df['postop_AHI'] <= 0.5*df['preop_AHI'])
                   & (df['postop_AHI'] < 15))).astype('float')
+  df['Sher20'] = (((df['postop_AHI'] <= 0.5*df['preop_AHI'])
+                  & (df['postop_AHI'] < 20))).astype('float')
   df['change_supine_AHI'] = df['Supine AHI.1'] - df['Supine AHI']
   df['change_nonsupine_AHI'] = df['Non-supine AHI.1'] - df['Non-supine AHI']
 
@@ -85,7 +97,7 @@ def main(df: pd.DataFrame) -> None:
                       .fillna(df['Preop PSG AASM Supine AHI']))
   df['is_supine_dependent'] = (df['supine_AHI'] >= 2*df['Non-supine AHI'])
 
-  df = df.dropna(subset=['supine_AHI', 'Non-supine AHI'])
+  df.dropna(subset=['supine_AHI', 'Non-supine AHI'], inplace=True)
 
   df['Group'] = df['is_supine_dependent'].replace({True: 'sOSA', False: 'nOSA'})
   df_long = (
@@ -99,25 +111,17 @@ def main(df: pd.DataFrame) -> None:
           'Non-supine AHI.1': 'Postoperative\nNon-Supine',
       })
   )
-  # print(df_long)
-  # df = pd.wide_to_long(df=df, stubnames=dependent_variables, i='Patient #',
-  #                      j='Month', sep='.',).reset_index()
-  # plt.subplot(1, 3, 1)
-  # sns.violinplot(data=df, x='is_supine_dependent', y='postop_AHI')
   sns.barplot(data=df_long, x='AHI_type', y='AHI', hue='Group')
   plt.xlabel('AHI Type')
   plt.ylabel('AHI (events/hour)')
   plt.grid(axis='y')
   plt.gca().set_axisbelow(True)
-  # plt.subplot(1, 3, 2)
-  # # sns.violinplot(data=df, x='is_supine_dependent', y='postop_AHI')
-  # sns.barplot(data=df, x='group', y='postop_AHI', legend=False)
-  # plt.subplot(1, 3, 3)
-  # sns.barplot(data=df, x='group', y='change_AHI', legend=False)
-  # # sns.violinplot(data=df, x='is_supine_dependent', y='change_AHI')
   df_long = (
       pd.melt(df, id_vars='Group', value_vars=['change_AHI', 'change_supine_AHI', 'change_nonsupine_AHI'], var_name='AHI_type', value_name='AHI')
       .replace({
+          'change_AHI': 'Total AHI',
+          'change_supine_AHI': 'Supine AHI',
+          'change_nonsupine_AHI': 'Non-Supine AHI',
       })
   )
   plt.figure()
@@ -128,67 +132,143 @@ def main(df: pd.DataFrame) -> None:
   plt.gca().set_axisbelow(True)
   
   # After this, we no longer need the original distinct AHIs
-  df = df.drop(columns=[
+  df.drop(columns=[
       'Preop sleep study: AHI',
       'Preop PSG Medicare AHI',
       'Preop PSG AASMI AHI',
       'postop sleep study: AHI',
       'postop PSG Medicare AHI',
       'postop PSG AASMI AHI',
-      # 'Supine AHI',
       'Preop PSG AASM Supine AHI',
       'Preop PSG Medicare Supine AHI',
-      # 'Non-supine AHI',
       'supine_AHI',
-  ])
+  ], inplace=True)
 
-  print_demographics(df, header='Summary statistics after preprocessing')
+  # print_demographics(df, header='Summary statistics after preprocessing')
   print_demographics(df[df['is_supine_dependent']], header='sOSA group statistics after preprocessing')
   print_demographics(df[~df['is_supine_dependent']], header='nOSA group statistics after preprocessing')
 
   # ===================== END PREPROCESSING =====================
   # ============ BEGIN SUPINE DEPENDENCE ANALYSES ===============
 
+  # ------------- Compare AHIs before vs. after treatment -------------
+  result = stats.wilcoxon(
+    df['change_AHI'][df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('\n\nWilcoxon signed-rank test for change in total AHI, in sOSA group:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.wilcoxon(
+    df['change_supine_AHI'][df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('Wilcoxon signed-rank test for change in supine AHI, in sOSA group:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.wilcoxon(
+    df['change_nonsupine_AHI'][df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('Wilcoxon signed-rank test for change in nonsupine AHI, in sOSA group:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.wilcoxon(
+    df['change_AHI'][~df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('Wilcoxon signed-rank test for change in total AHI, in nOSA group:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.wilcoxon(
+    df['change_supine_AHI'][~df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('Wilcoxon signed-rank test for change in supine AHI, in nOSA group:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.wilcoxon(
+    df['change_nonsupine_AHI'][~df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('Wilcoxon signed-rank test for change in nonsupine AHI, in nOSA group:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}\n\n')
+
+  # ------------- Compare AHIs between sOSA & nOSA groups -------------
   # Since is_supine_dependent is binary and postop_AHI is continuous, we use a t-test
   result = stats.mannwhitneyu(
     df['postop_AHI'][df['is_supine_dependent']],
     df['postop_AHI'][~df['is_supine_dependent']],
     alternative='greater',
+    nan_policy='raise',
   )
-  print('Mann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
-  print(f'U: {result.statistic}  p: {result.pvalue}')
+  print('\n\nMann-Whitney U-test for independence of is_supine_dependent and postop_AHI:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
 
-  # Since is_supine_dependent is binary and change_AHI is continuous, we use a t-test
+  # Since is_supine_dependent is binary and AHI changes are continuous, we use a Mann-Whitney
   result = stats.mannwhitneyu(
     df['change_AHI'][df['is_supine_dependent']],
     df['change_AHI'][~df['is_supine_dependent']],
     alternative='greater',
+    nan_policy='raise',
   )
-  print('\nMann-Whitney U-test for independence of is_supine_dependent and change_AHI:')
-  print(f'U: {result.statistic}  p: {result.pvalue}\n\n')
+  print('Mann-Whitney U-test for independence of is_supine_dependent and change_AHI:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.mannwhitneyu(
+    df['change_supine_AHI'][df['is_supine_dependent']],
+    df['change_supine_AHI'][~df['is_supine_dependent']],
+    alternative='less',
+    nan_policy='omit',
+  )
+  print('Mann-Whitney U-test for independence of is_supine_dependent and change_supine_AHI:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}')
+
+  result = stats.mannwhitneyu(
+    df['change_nonsupine_AHI'][df['is_supine_dependent']],
+    df['change_nonsupine_AHI'][~df['is_supine_dependent']],
+    alternative='greater',
+    nan_policy='omit',
+  )
+  print('Mann-Whitney U-test for independence of is_supine_dependent and change_nonsupine_AHI:')
+  print(f'U: {result.statistic:.03f}  p: {result.pvalue:.03f}\n\n')
 
   # Since both is_supine_dependent and Sher15 are binary, we use a Chi^2 test
   contingency_table = pd.crosstab(df['is_supine_dependent'], df['Sher15'])
   chi2, p, dof, expected = stats.chi2_contingency(contingency_table)
-  print('\nChi^2 test for independence of supine dependence and Sher15:')
+  print('Chi^2 test for independence of supine dependence and Sher15:')
   print('Observed contingency table:')
   print(contingency_table)
   print('Expected contingency table:')
   print(expected)
-  print(f'Test tesults: chi2: {chi2}  p: {p}  dof: {dof}\n\n')
+  print(f'Test tesults: chi2: {chi2:.03f}  p: {p:.03f}  dof: {dof}\n\n')
+
+  # Since both is_supine_dependent and Sher20 are binary, we use a Chi^2 test
+  contingency_table = pd.crosstab(df['is_supine_dependent'], df['Sher20'])
+  chi2, p, dof, expected = stats.chi2_contingency(contingency_table)
+  print('\nChi^2 test for independence of supine dependence and Sher20:')
+  print('Observed contingency table:')
+  print(contingency_table)
+  print('Expected contingency table:')
+  print(expected)
+  print(f'Test tesults: chi2: {chi2:.03f}  p: {p:.03f}  dof: {dof}\n\n')
 
   # Compare change_supine_AHI and change_nonsupine_AHI to see if HGNS has a
   # differential effect.
   supine_ci = stats.bootstrap(data=(df['change_supine_AHI'],), method='percentile', statistic=np.nanmean, confidence_level=0.95, rng=0).confidence_interval
-  print(f'Supine AHI had mean change {df["change_supine_AHI"].mean():.3f} (95% bootstrap CI ({supine_ci.low}, {supine_ci.high})).')
+  print(f'Supine AHI had mean change {df["change_supine_AHI"].mean():.3f} (95% bootstrap CI ({supine_ci.low:.03f}, {supine_ci.high:.03f})).')
   nonsupine_ci = stats.bootstrap(data=(df['change_nonsupine_AHI'],), method='percentile', statistic=np.nanmean, confidence_level=0.95, rng=0).confidence_interval
-  print(f'Non-Supine AHI had mean change {df["change_nonsupine_AHI"].mean():.3f} (95% bootstrap CI ({nonsupine_ci.low}, {nonsupine_ci.high})).')
-  result = stats.ttest_rel(df['change_supine_AHI'], df['change_nonsupine_AHI'], nan_policy='omit')
+  print(f'Non-Supine AHI had mean change {df["change_nonsupine_AHI"].mean():.3f} (95% bootstrap CI ({nonsupine_ci.low:.03f}, {nonsupine_ci.high:.03f})).')
+  result = stats.wilcoxon(df['change_supine_AHI'], df['change_nonsupine_AHI'], nan_policy='omit')
   print(f'Difference in means between changes in supine and nonsupine AHIs:')
-  print((df['change_supine_AHI'] - df['change_nonsupine_AHI']).mean())
-  print(f't: {result.statistic}  p: {result.pvalue}  df: {result.df}\n\n')
-
-  # plt.plot([df['change_supine_AHI'], df['change_nonsupine_AHI']])
+  print(f'Mean: {(df['change_supine_AHI'] - df['change_nonsupine_AHI']).mean():.02f}')
+  print(f'p: {result.pvalue:.03f}\n\n')
 
   # ============= END SUPINE DEPENDENCE ANALYSES ================
   
@@ -197,5 +277,9 @@ def main(df: pd.DataFrame) -> None:
 
 if __name__ == "__main__":
   # Read in just the columns we need from the data table
-  df = pd.read_csv(data_filename, usecols=usecols)
+  df = loading_function(data_filename, usecols=usecols).rename(columns={
+      'Race/Ethnicity': 'Race',
+      'Age at time of surgery': 'Age',
+      'BMI - preop': 'BMI',
+  })
   main(df)
